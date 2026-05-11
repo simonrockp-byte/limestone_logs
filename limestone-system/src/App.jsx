@@ -285,6 +285,7 @@ const App = () => {
             {currentView === 'dashboard' && <DashboardView po={activePO} logs={logs} />}
             {currentView === 'logs'      && <LogsView logs={logs} />}
             {currentView === 'pos'       && <ReconciliationView logs={logs} />}
+            {currentView === 'pos'       && <PoManagementView pos={pos} activePoId={activePoId} onSwitch={setActivePoId} onCreate={() => setShowPoModal(true)} />}
             {currentView === 'invoices'  && <InvoiceView config={config} po={activePO} logs={logs} />}
             {currentView === 'config'    && <ConfigView config={config} setConfig={c => { setConfig(c); saveConfig(c); }} />}
           </motion.div>
@@ -292,6 +293,7 @@ const App = () => {
 
         <AnimatePresence>
           {showAddModal && <AddTripModal onClose={() => setShowAddModal(false)} onSave={addTrip} />}
+          {showPoModal && <AddPoModal onClose={() => setShowPoModal(false)} />}
         </AnimatePresence>
       </main>
     </div>
