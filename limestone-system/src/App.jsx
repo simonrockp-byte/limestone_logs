@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import {
   LayoutDashboard, ClipboardList, FileText, Settings, PlusCircle,
   TrendingUp, Bus, LogOut, AlertCircle, CheckCircle2,
-  Wallet, X, Download, Cloud, Loader2
+  Wallet, X, Download, Cloud, Loader2,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import jsPDF from 'jspdf';
@@ -36,7 +36,7 @@ const INITIAL_CONFIG = {
   ],
 };
 
-const DEFAULT_PO = { id: 'po-001', number: 'PO-001', start_date: '2026-04-23', trips_authorised: 63, rate: 790, status: 'IN PROGRESS' };
+const INITIAL_PO = { number: 'PO-001', startDate: '2026-04-23', tripsAuthorised: 63, rate: 790, status: 'IN PROGRESS' };
 const PUBLIC_HOLIDAYS = ['2026-04-28', '2026-05-01'];
 
 const getWorkingDays = (start, end) => {
@@ -111,13 +111,9 @@ const App = () => {
   const [currentView, setCurrentView] = useState('dashboard');
   const [config, setConfig] = useState(INITIAL_CONFIG);
   const [logs, setLogs] = useState([]);
-  const [pos, setPos] = useState([DEFAULT_PO]);
-  const [activePoId, setActivePoId] = useState(DEFAULT_PO.id);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
-  const [showPoModal, setShowPoModal] = useState(false);
-  const [editingLog, setEditingLog] = useState(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -128,14 +124,8 @@ const App = () => {
         return;
       }
       try {
-        const { data: poData } = await supabase.from('purchase_orders').select('*').order('created_at', { ascending: false });
         const { data: logData } = await supabase.from('trip_logs').select('*').order('iso_date', { ascending: false });
         const { data: configData } = await supabase.from('system_config').select('data').eq('id', 'main_config').single();
-
-        if (poData?.length) {
-          setPos(poData);
-          setActivePoId(poData[0].id);
-        }
         if (logData?.length) setLogs(logData);
         if (configData) setConfig(configData.data);
       } catch (err) {
@@ -154,20 +144,8 @@ const App = () => {
       id: log.id, date: log.date, iso_date: log.isoDate,
       route: log.route, type: log.type, sched: log.sched,
       actual: log.actual, pax: parseInt(log.pax), status: log.status,
-      po_id: activePoId
     });
     if (error) console.error('Sync error:', error);
-    setSyncing(false);
-  };
-
-  const deleteLog = async (id) => {
-    setSyncing(true);
-    if (supabase) {
-      const { error } = await supabase.from('trip_logs').delete().eq('id', id);
-      if (!error) setLogs(logs.filter(l => l.id !== id));
-    } else {
-      setLogs(logs.filter(l => l.id !== id));
-    }
     setSyncing(false);
   };
 
@@ -182,124 +160,21 @@ const App = () => {
   const addTrip = (trip) => {
     const newLog = {
       ...trip,
-      id: trip.id || `${trip.isoDate}-${trip.route}-${trip.type}-${Date.now()}`,
+      id: `${trip.isoDate}-${trip.route}-${trip.type}-${Date.now()}`,
       status: trip.actual <= trip.sched ? 'On Time' : 'Late',
       date: new Date(trip.isoDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }),
     };
-    
-    if (editingLog) {
-      setLogs(logs.map(l => l.id === editingLog.id ? newLog : l));
-      setEditingLog(null);
-    } else {
-      setLogs([newLog, ...logs]);
-    }
-    
+    setLogs(prev => [newLog, ...prev]);
     setShowAddModal(false);
     saveLog(newLog);
   };
 
-  const syncScheduledTrips = async () => {
-    setSyncing(true);
-    const today = new Date().toISOString().split('T')[0];
-    const workingDays = getWorkingDays(INITIAL_PO.startDate, today).filter(d => d.isWorking);
-    const newTrips = [];
-
-    workingDays.forEach(day => {
-      ['Chifubu', 'Lubuto'].forEach(route => {
-        [{ type: 'Morning', sched: '06:00' }, { type: 'Day Shift', sched: '16:00' }].forEach(shift => {
-          const exists = logs.some(l => l.iso_date === day.iso && l.route === route && l.type === shift.type);
-          if (!exists) {
-            newTrips.push({
-              id: `${day.iso}-${route}-${shift.type}-${Date.now()}`,
-              date: day.label,
-              iso_date: day.iso,
-              route,
-              type: shift.type,
-              sched: shift.sched,
-              actual: shift.sched,
-              pax: 42,
-              status: 'On Time'
-            });
-          }
-        });
-      });
-    });
-
-    if (newTrips.length > 0) {
-      if (supabase) {
-        const { data, error } = await supabase.from('trip_logs').insert(newTrips).select();
-        if (!error) setLogs([...data, ...logs]);
-      } else {
-        setLogs([...newTrips, ...logs]);
-      }
-    }
-    setSyncing(false);
-  };
-
-  const syncScheduledTrips = async () => {
-    setSyncing(true);
-    const today = new Date().toISOString().split('T')[0];
-    const workingDays = getWorkingDays(INITIAL_PO.startDate, today).filter(d => d.isWorking);
-    const newTrips = [];
-
-    workingDays.forEach(day => {
-      ['Chifubu', 'Lubuto'].forEach(route => {
-        [{ type: 'Morning', sched: '06:00' }, { type: 'Day Shift', sched: '16:00' }].forEach(shift => {
-          const exists = logs.some(l => l.iso_date === day.iso && l.route === route && l.type === shift.type);
-          if (!exists) {
-            newTrips.push({
-              id: `${day.iso}-${route}-${shift.type}-${Date.now()}`,
-              date: day.label,
-              iso_date: day.iso,
-              route,
-              type: shift.type,
-              sched: shift.sched,
-              actual: shift.sched,
-              pax: 42,
-              status: 'On Time',
-            });
-          }
-        });
-      });
-    });
-
-    if (newTrips.length > 0) {
-      if (supabase) {
-        const { data, error } = await supabase.from('trip_logs').insert(newTrips).select();
-        if (!error) setLogs(prev => [...data, ...prev]);
-      } else {
-        setLogs(prev => [...newTrips, ...prev]);
-      }
-    }
-    setSyncing(false);
-  };
-
-  const addPo = async (newPo) => {
-    setSyncing(true);
-    const po = { ...newPo, id: `po-${Date.now()}` };
-    if (supabase) {
-      const { error } = await supabase.from('purchase_orders').insert(po);
-      if (!error) {
-        setPos([po, ...pos]);
-        setActivePoId(po.id);
-      }
-    } else {
-      setPos([po, ...pos]);
-      setActivePoId(po.id);
-    }
-    setShowPoModal(false);
-    setSyncing(false);
-  };
-
-  const activePO = pos.find(p => p.id === activePoId) || DEFAULT_PO;
-  const filteredLogs = logs.filter(l => l.po_id === activePoId);
-  const activePOTripsCompleted = filteredLogs.length;
-  const poWithStats = { ...activePO, tripsCompleted: activePOTripsCompleted };
+  const activePO = { ...INITIAL_PO, tripsCompleted: logs.length };
 
   if (loading) return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#05060f', color: '#10b981', gap: 16 }}>
       <Loader2 className="animate-spin" size={40} />
-      <p style={{ color: '#64748b', fontSize: 11, letterSpacing: '0.15em', textTransform: 'uppercase' }}>Connecting to cloud…</p>
+      <p style={{ color: '#64748b', fontSize: 11, letterSpacing: '0.15em', textTransform: 'uppercase' }}>Connecting to cloud...</p>
     </div>
   );
 
@@ -307,7 +182,6 @@ const App = () => {
     <div className="app-container">
       <div className="bg-glow" />
 
-      {/* Sidebar */}
       <aside className="sidebar">
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 36, paddingLeft: 4 }}>
           <div style={{ padding: 8, borderRadius: 10, background: 'rgba(16,185,129,0.15)', color: '#10b981', display: 'flex' }}>
@@ -344,7 +218,6 @@ const App = () => {
           })}
         </nav>
 
-        {/* Sync badge */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8,
           padding: '8px 12px', borderRadius: 8, marginBottom: 16,
@@ -354,17 +227,18 @@ const App = () => {
           {syncing
             ? <Loader2 size={13} className="animate-spin" style={{ color: '#10b981' }} />
             : <Cloud size={13} style={{ color: supabase ? '#10b981' : '#f59e0b' }} />}
-          <span>{!supabase ? 'Local storage' : syncing ? 'Syncing…' : 'Live'}</span>
+          <span>{!supabase ? 'Local storage' : syncing ? 'Syncing...' : 'Live'}</span>
         </div>
 
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 12 }}>
-          <button style={{
-            display: 'flex', alignItems: 'center', gap: 12,
-            padding: '10px 14px', borderRadius: 10, border: 'none',
-            cursor: 'pointer', width: '100%', background: 'transparent',
-            fontFamily: 'Inter, sans-serif', fontSize: 13, fontWeight: 600,
-            color: '#475569', transition: 'color 0.15s',
-          }}
+          <button
+            style={{
+              display: 'flex', alignItems: 'center', gap: 12,
+              padding: '10px 14px', borderRadius: 10, border: 'none',
+              cursor: 'pointer', width: '100%', background: 'transparent',
+              fontFamily: 'Inter, sans-serif', fontSize: 13, fontWeight: 600,
+              color: '#475569', transition: 'color 0.15s',
+            }}
             onMouseEnter={e => e.currentTarget.style.color = '#f43f5e'}
             onMouseLeave={e => e.currentTarget.style.color = '#475569'}
           >
@@ -374,27 +248,26 @@ const App = () => {
         </div>
       </aside>
 
-      {/* Main */}
       <main className="main-content">
         <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 36 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             <h2 style={{ fontSize: 22, fontWeight: 800, color: '#fff', textTransform: 'capitalize', letterSpacing: '-0.02em' }}>
-              {currentView === 'pos' ? 'PO Management' : currentView}
+              {currentView === 'pos' ? 'PO Reconciliation' : currentView}
             </h2>
             <span style={{ width: 1, height: 20, background: 'rgba(255,255,255,0.1)' }} />
-            <select 
-              value={activePoId} 
-              onChange={(e) => setActivePoId(e.target.value)}
-              className="input-field"
-              style={{ padding: '6px 12px', width: 'auto', fontSize: 12, height: 32 }}
-            >
-              {pos.map(p => <option key={p.id} value={p.id}>{p.number}</option>)}
-            </select>
+            <p style={{ fontSize: 13, color: '#475569' }}>{activePO.number} &middot; {logs.length} trips</p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <button className="btn btn-glass" style={{ color: '#10b981', borderColor: 'rgba(16,185,129,0.2)' }} onClick={() => setShowPoModal(true)}>
-              <PlusCircle size={16} /> New PO
-            </button>
+            {!supabase && (
+              <span style={{
+                fontSize: 10, fontWeight: 700, color: '#f59e0b',
+                background: 'rgba(245,158,11,0.1)', padding: '6px 12px',
+                borderRadius: 8, border: '1px solid rgba(245,158,11,0.2)',
+                textTransform: 'uppercase', letterSpacing: '0.08em',
+              }}>
+                Add Supabase keys
+              </span>
+            )}
             <button className="btn btn-primary" onClick={() => setShowAddModal(true)}>
               <PlusCircle size={16} /> New Trip
             </button>
@@ -409,17 +282,16 @@ const App = () => {
             exit={{ opacity: 0, y: -8 }}
             transition={{ duration: 0.18 }}
           >
-            {currentView === 'dashboard' && <DashboardView po={poWithStats} logs={filteredLogs} onSync={syncScheduledTrips} syncing={syncing} />}
-            {currentView === 'logs'      && <LogsView logs={filteredLogs} onDelete={deleteLog} onEdit={(l) => { setEditingLog(l); setShowAddModal(true); }} />}
-            {currentView === 'pos'       && <PoManagementView pos={pos} activePoId={activePoId} onSwitch={setActivePoId} />}
-            {currentView === 'invoices'  && <InvoiceView config={config} po={activePO} logs={filteredLogs} />}
+            {currentView === 'dashboard' && <DashboardView po={activePO} logs={logs} />}
+            {currentView === 'logs'      && <LogsView logs={logs} />}
+            {currentView === 'pos'       && <ReconciliationView logs={logs} />}
+            {currentView === 'invoices'  && <InvoiceView config={config} po={activePO} logs={logs} />}
             {currentView === 'config'    && <ConfigView config={config} setConfig={c => { setConfig(c); saveConfig(c); }} />}
           </motion.div>
         </AnimatePresence>
 
         <AnimatePresence>
-          {showAddModal && <AddTripModal log={editingLog} onClose={() => { setShowAddModal(false); setEditingLog(null); }} onSave={addTrip} />}
-          {showPoModal && <AddPoModal onClose={() => setShowPoModal(false)} onSave={addPo} />}
+          {showAddModal && <AddTripModal onClose={() => setShowAddModal(false)} onSave={addTrip} />}
         </AnimatePresence>
       </main>
     </div>
@@ -427,31 +299,15 @@ const App = () => {
 };
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
-const DashboardView = ({ po, logs, onSync, syncing }) => {
+const DashboardView = ({ po, logs }) => {
   const percent = Math.min((po.tripsCompleted / po.tripsAuthorised) * 100, 100);
   const revenue = po.tripsCompleted * po.rate;
   const late = logs.filter(l => l.status === 'Late').length;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: -4 }}>
-        <button 
-          onClick={onSync} 
-          disabled={syncing}
-          className="btn btn-glass"
-          style={{ 
-            fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em',
-            padding: '8px 16px', color: '#10b981', borderColor: 'rgba(16,185,129,0.2)' 
-          }}
-        >
-          {syncing ? <Loader2 size={12} className="animate-spin" /> : <CheckCheck size={12} />}
-          {syncing ? 'Synchronizing...' : 'Sync All Scheduled'}
-        </button>
-      </div>
-      {/* Revenue banner */}
       <div className="glass glass-card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '32px 36px', position: 'relative', overflow: 'hidden' }}>
         <div style={{ position: 'absolute', top: -60, right: -60, width: 220, height: 220, background: 'rgba(16,185,129,0.08)', borderRadius: '50%', filter: 'blur(60px)', pointerEvents: 'none' }} />
-
         <div style={{ flex: 1, position: 'relative', zIndex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#10b981', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 16 }}>
             <TrendingUp size={14} /> Revenue Overview
@@ -469,7 +325,6 @@ const DashboardView = ({ po, logs, onSync, syncing }) => {
             />
           </div>
         </div>
-
         <div style={{ display: 'flex', gap: 48, paddingLeft: 48, borderLeft: '1px solid rgba(255,255,255,0.06)', position: 'relative', zIndex: 1 }}>
           <div style={{ textAlign: 'center' }}>
             <p style={{ fontSize: 10, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4 }}>Total Earned</p>
@@ -482,7 +337,6 @@ const DashboardView = ({ po, logs, onSync, syncing }) => {
         </div>
       </div>
 
-      {/* KPI cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
         {[
           { label: 'Cloud Database', val: 'Supabase', sub: 'Real-time sync', icon: Cloud, color: '#10b981' },
@@ -504,7 +358,14 @@ const DashboardView = ({ po, logs, onSync, syncing }) => {
 };
 
 // ─── Logs ─────────────────────────────────────────────────────────────────────
-const LogsView = ({ logs, onDelete, onEdit }) => {
+const exportItemStyle = {
+  display: 'block', width: '100%', padding: '11px 16px',
+  background: 'transparent', border: 'none', cursor: 'pointer',
+  textAlign: 'left', fontSize: 12, fontWeight: 600, color: '#94a3b8',
+  fontFamily: 'Inter, sans-serif', transition: 'background 0.1s',
+};
+
+const LogsView = ({ logs }) => {
   const [activeRoute, setActiveRoute] = useState('Chifubu');
   const [showExportMenu, setShowExportMenu] = useState(false);
   const filteredLogs = logs.filter(l => l.route === activeRoute);
@@ -512,7 +373,6 @@ const LogsView = ({ logs, onDelete, onEdit }) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        {/* Route tabs */}
         <div style={{ display: 'flex', gap: 4, padding: 4, background: 'rgba(255,255,255,0.04)', borderRadius: 10, border: '1px solid rgba(255,255,255,0.06)' }}>
           {['Chifubu', 'Lubuto'].map(r => (
             <button
@@ -531,7 +391,6 @@ const LogsView = ({ logs, onDelete, onEdit }) => {
           ))}
         </div>
 
-        {/* Export */}
         <div style={{ position: 'relative' }}>
           <button className="btn btn-glass" onClick={() => setShowExportMenu(v => !v)}>
             <Download size={15} /> Export
@@ -546,12 +405,8 @@ const LogsView = ({ logs, onDelete, onEdit }) => {
                 className="glass"
                 style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 200, borderRadius: 10, overflow: 'hidden', zIndex: 20 }}
               >
-                <button onClick={() => { exportToPDF(logs); setShowExportMenu(false); }} style={exportItemStyle}>
-                  PDF Report
-                </button>
-                <button onClick={() => { exportToExcel(logs); setShowExportMenu(false); }} style={{ ...exportItemStyle, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                  Excel Sheet
-                </button>
+                <button onClick={() => { exportToPDF(logs); setShowExportMenu(false); }} style={exportItemStyle}>PDF Report</button>
+                <button onClick={() => { exportToExcel(logs); setShowExportMenu(false); }} style={{ ...exportItemStyle, borderTop: '1px solid rgba(255,255,255,0.06)' }}>Excel Sheet</button>
               </motion.div>
             )}
           </AnimatePresence>
@@ -562,7 +417,7 @@ const LogsView = ({ logs, onDelete, onEdit }) => {
         <table className="data-table">
           <thead>
             <tr>
-              <th>Date</th><th>Shift</th><th>Scheduled</th><th>Actual</th><th>PAX</th><th>Status</th><th style={{ textAlign: 'right' }}>Actions</th>
+              <th>Date</th><th>Shift</th><th>Scheduled</th><th>Actual</th><th>PAX</th><th style={{ textAlign: 'right' }}>Status</th>
             </tr>
           </thead>
           <tbody>
@@ -579,22 +434,16 @@ const LogsView = ({ logs, onDelete, onEdit }) => {
                   <td style={{ color: '#64748b', fontFamily: 'monospace', fontSize: 12 }}>{row.sched}</td>
                   <td style={{ color: '#fff', fontWeight: 700, fontFamily: 'monospace', fontSize: 12 }}>{row.actual}</td>
                   <td style={{ color: '#94a3b8', fontWeight: 600 }}>{row.pax}</td>
-                  <td>
+                  <td style={{ textAlign: 'right' }}>
                     <span style={{
                       padding: '3px 10px', borderRadius: 99, fontSize: 10, fontWeight: 800,
                       textTransform: 'uppercase', letterSpacing: '0.06em',
                       ...(row.status === 'On Time'
                         ? { background: 'rgba(16,185,129,0.15)', color: '#10b981', border: '1px solid rgba(16,185,129,0.2)' }
-                        : { background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.2)' })
+                        : { background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.2)' }),
                     }}>
                       {row.status}
                     </span>
-                  </td>
-                  <td style={{ textAlign: 'right' }}>
-                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                      <button onClick={() => onEdit(row)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }}><Settings size={14} /></button>
-                      <button onClick={() => onDelete(row.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#f43f5e' }}><X size={14} /></button>
-                    </div>
                   </td>
                 </tr>
               ))
@@ -606,15 +455,42 @@ const LogsView = ({ logs, onDelete, onEdit }) => {
   );
 };
 
-const exportItemStyle = {
-  display: 'block', width: '100%', padding: '11px 16px',
-  background: 'transparent', border: 'none', cursor: 'pointer',
-  textAlign: 'left', fontSize: 12, fontWeight: 600, color: '#94a3b8',
-  fontFamily: 'Inter, sans-serif', transition: 'background 0.1s',
-};
+// ─── Reconciliation ───────────────────────────────────────────────────────────
+const ReconciliationView = ({ logs }) => {
+  const allDays = getWorkingDays('2026-04-23', '2026-05-11');
+  const hasLog = (iso, route, type) => logs.some(l => l.iso_date === iso && l.route === route && l.type === type);
+  let runningTotal = 0;
 
-                          ? <span style={{ color: '#10b981' }}>✓</span>
-                          : <span style={{ color: '#f43f5e', opacity: 0.3 }}>✗</span>}
+  return (
+    <div className="glass glass-card" style={{ padding: 0, overflow: 'hidden' }}>
+      <div style={{ overflowX: 'auto' }}>
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Date</th><th>Day</th>
+              <th style={{ textAlign: 'center' }}>Chifubu AM</th>
+              <th style={{ textAlign: 'center' }}>Chifubu PM</th>
+              <th style={{ textAlign: 'center' }}>Lubuto AM</th>
+              <th style={{ textAlign: 'center' }}>Lubuto PM</th>
+              <th style={{ textAlign: 'right' }}>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {allDays.map(day => {
+              const tripsToday = day.isWorking ? logs.filter(l => l.iso_date === day.iso).length : 0;
+              if (day.isWorking) runningTotal += tripsToday;
+              return (
+                <tr key={day.iso} style={{ opacity: day.isWorking ? 1 : 0.25 }}>
+                  <td style={{ fontWeight: 600, fontSize: 12, color: '#cbd5e1' }}>{day.label}</td>
+                  <td style={{ fontSize: 11, color: '#475569', fontWeight: 600 }}>
+                    {day.isWorking ? day.dayName : day.reason}
+                  </td>
+                  {day.isWorking
+                    ? [['Chifubu', 'Morning'], ['Chifubu', 'Day Shift'], ['Lubuto', 'Morning'], ['Lubuto', 'Day Shift']].map(([r, t]) => (
+                      <td key={`${r}-${t}`} style={{ textAlign: 'center', fontSize: 16, fontWeight: 700 }}>
+                        {hasLog(day.iso, r, t)
+                          ? <span style={{ color: '#10b981' }}>&#10003;</span>
+                          : <span style={{ color: '#f43f5e', opacity: 0.3 }}>&#10007;</span>}
                       </td>
                     ))
                     : <td colSpan={4} style={{ textAlign: 'center', fontSize: 10, color: '#334155', fontStyle: 'italic', letterSpacing: '0.1em' }}>NO SERVICE</td>
@@ -646,7 +522,6 @@ const InvoiceView = ({ config, po, logs }) => {
       </div>
 
       <div className="glass" style={{ padding: '56px 64px', borderRadius: 20, maxWidth: 860, margin: '0 auto', width: '100%' }}>
-        {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 52 }}>
           <div>
             <h4 style={{ fontSize: 22, fontWeight: 900, color: '#10b981', letterSpacing: '-0.03em', marginBottom: 6, fontFamily: 'Outfit, sans-serif' }}>
@@ -662,14 +537,12 @@ const InvoiceView = ({ config, po, logs }) => {
           </div>
         </div>
 
-        {/* Client */}
         <div style={{ marginBottom: 44 }}>
           <p style={{ fontSize: 10, color: '#10b981', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.2em', marginBottom: 10 }}>Bill To</p>
           <h5 style={{ fontSize: 20, fontWeight: 900, color: '#fff', fontFamily: 'Outfit, sans-serif', marginBottom: 4 }}>{config.client.name}</h5>
           <p style={{ fontSize: 12, color: '#475569' }}>{config.client.address}</p>
         </div>
 
-        {/* Line items */}
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', borderBottom: '1px solid rgba(255,255,255,0.06)', padding: '32px 0', marginBottom: 40 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -694,7 +567,6 @@ const InvoiceView = ({ config, po, logs }) => {
           </table>
         </div>
 
-        {/* Footer */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32 }}>
           <div>
             <p style={{ fontSize: 10, color: '#475569', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 12 }}>Banking Details</p>
@@ -744,8 +616,8 @@ const ConfigView = ({ config, setConfig }) => (
 );
 
 // ─── Add Trip Modal ───────────────────────────────────────────────────────────
-const AddTripModal = ({ log, onClose, onSave }) => {
-  const [form, setForm] = useState(log || {
+const AddTripModal = ({ onClose, onSave }) => {
+  const [form, setForm] = useState({
     isoDate: new Date().toISOString().split('T')[0],
     route: 'Chifubu',
     type: 'Morning',
@@ -803,7 +675,7 @@ const AddTripModal = ({ log, onClose, onSave }) => {
                     fontFamily: 'Inter, sans-serif', transition: 'all 0.15s',
                     ...(form.type === s
                       ? { background: 'rgba(16,185,129,0.15)', borderColor: 'rgba(16,185,129,0.4)', color: '#10b981' }
-                      : { background: 'transparent', borderColor: 'rgba(255,255,255,0.08)', color: '#475569' })
+                      : { background: 'transparent', borderColor: 'rgba(255,255,255,0.08)', color: '#475569' }),
                   }}
                 >
                   {s}
