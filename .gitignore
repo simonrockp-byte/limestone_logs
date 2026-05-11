@@ -1,0 +1,6 @@
+limestone-system/node_modules/
+limestone-system/dist/
+limestone-system/.env
+limestone-system/.DS_Store
+.DS_Store
+~$*.xlsx
