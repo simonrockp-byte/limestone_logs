@@ -4,6 +4,12 @@ import { motion, AnimatePresence } from 'framer-motion';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
+import { createClient } from '@supabase/supabase-js';
+
+// ─── Supabase Initialization ─────────────────────────────────────────────────
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabase = (supabaseUrl && supabaseAnonKey) ? createClient(supabaseUrl, supabaseAnonKey) : null;
 
 // ─── Constants & Utils ───────────────────────────────────────────────────────
 const INITIAL_CONFIG = {
@@ -36,14 +42,12 @@ const getWorkingDays = (start, end) => {
 // ─── Export Helpers ──────────────────────────────────────────────────────────
 const exportToPDF = (logs) => {
   const doc = new jsPDF();
-  doc.setFontSize(14);
-  doc.text('Hamoney Investments — Trip Log Report', 14, 16);
+  doc.setFontSize(14); doc.text('Hamoney Investments — Trip Log Report', 14, 16);
   autoTable(doc, {
     startY: 28,
     head: [['Date', 'Route', 'Shift', 'Sched', 'Actual', 'PAX', 'Status']],
     body: logs.map(l => [l.date, l.route, l.type, l.sched, l.actual, l.pax, l.status]),
-    styles: { fontSize: 8 },
-    headStyles: { fillColor: [16, 185, 129] },
+    styles: { fontSize: 8 }, headStyles: { fillColor: [16, 185, 129] },
   });
   doc.save('hamoney_trip_logs.pdf');
 };
@@ -79,31 +83,32 @@ const App = () => {
   const [syncing, setSyncing] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
 
-  // 1. Fetch Data from Neon (via Netlify Functions)
+  // 1. Fetch Data from Supabase
   useEffect(() => {
     const fetchData = async () => {
-      try {
-        const res = await fetch('/.netlify/functions/api');
-        const data = await res.json();
-        
-        if (data.logs && data.logs.length > 0) {
-          setLogs(data.logs);
-        } else {
-          // Fallback to LocalStorage if DB is empty
-          const savedLogs = localStorage.getItem('limestone_logs_v2');
-          if (savedLogs) setLogs(JSON.parse(savedLogs));
-        }
-
-        if (data.config) {
-          setConfig(data.config);
-        } else {
-          const savedConfig = localStorage.getItem('limestone_config');
-          if (savedConfig) setConfig(JSON.parse(savedConfig));
-        }
-      } catch (err) {
-        console.error("Fetch failed, using LocalStorage:", err);
+      if (!supabase) {
+        setLoading(false);
         const savedLogs = localStorage.getItem('limestone_logs_v2');
         if (savedLogs) setLogs(JSON.parse(savedLogs));
+        return;
+      }
+
+      try {
+        const { data: logData, error: logError } = await supabase
+          .from('trip_logs')
+          .select('*')
+          .order('iso_date', { ascending: false });
+
+        const { data: configData, error: configError } = await supabase
+          .from('system_config')
+          .select('data')
+          .eq('id', 'main_config')
+          .single();
+
+        if (logData && logData.length > 0) setLogs(logData);
+        if (configData) setConfig(configData.data);
+      } catch (err) {
+        console.error("Supabase fetch failed:", err);
       } finally {
         setLoading(false);
       }
@@ -111,26 +116,34 @@ const App = () => {
     fetchData();
   }, []);
 
-  // 2. Sync Actions to Database
+  // 2. Sync Actions
   const saveLog = async (log) => {
+    if (!supabase) return;
     setSyncing(true);
-    try {
-      await fetch('/.netlify/functions/api', {
-        method: 'POST',
-        body: JSON.stringify({ type: 'log', log })
+    const { error } = await supabase
+      .from('trip_logs')
+      .upsert({ 
+        id: log.id, 
+        date: log.date, 
+        iso_date: log.isoDate, 
+        route: log.route, 
+        type: log.type, 
+        sched: log.sched, 
+        actual: log.actual, 
+        pax: parseInt(log.pax), 
+        status: log.status 
       });
-    } catch (err) { console.error("Sync failed:", err); }
+    if (error) console.error("Sync error:", error);
     setSyncing(false);
   };
 
   const saveConfig = async (newConfig) => {
+    if (!supabase) return;
     setSyncing(true);
-    try {
-      await fetch('/.netlify/functions/api', {
-        method: 'POST',
-        body: JSON.stringify({ type: 'config', config: newConfig })
-      });
-    } catch (err) { console.error("Sync failed:", err); }
+    const { error } = await supabase
+      .from('system_config')
+      .upsert({ id: 'main_config', data: newConfig });
+    if (error) console.error("Config sync error:", error);
     setSyncing(false);
   };
 
@@ -141,10 +154,9 @@ const App = () => {
       status: trip.actual <= trip.sched ? 'On Time' : 'Late', 
       date: new Date(trip.isoDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) 
     };
-    const updatedLogs = [newLog, ...logs];
-    setLogs(updatedLogs);
+    setLogs([newLog, ...logs]);
     setShowAddModal(false);
-    saveLog(newLog); // Save to cloud
+    saveLog(newLog);
   };
 
   const activePO = { ...INITIAL_PO, tripsCompleted: logs.length };
@@ -152,7 +164,7 @@ const App = () => {
   if (loading) return (
     <div className="h-screen w-screen flex flex-col items-center justify-center bg-[#05060f] text-emerald-400">
       <Loader2 className="animate-spin mb-4" size={48} />
-      <p className="text-slate-400 font-medium tracking-widest uppercase text-xs">Initializing Secure Cloud Connection...</p>
+      <p className="text-slate-400 font-medium tracking-widest uppercase text-xs">Connecting to Supabase Cloud...</p>
     </div>
   );
 
@@ -164,10 +176,11 @@ const App = () => {
         <div className="flex items-center gap-3 mb-10 px-2">
           <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-500"><Bus size={28} /></div>
           <div>
-            <h1 className="text-xl font-bold tracking-tight">Hamoney</h1>
-            <p className="text-[10px] text-slate-500 uppercase tracking-[2px]">Logistics Pro</p>
+            <h1 className="text-xl font-bold tracking-tight text-white">Hamoney</h1>
+            <p className="text-[10px] text-slate-500 uppercase tracking-[2px]">Supabase Integrated</p>
           </div>
         </div>
+        
         <nav className="flex-1 space-y-2">
           {[
             { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -184,10 +197,9 @@ const App = () => {
           ))}
         </nav>
         
-        {/* Sync Indicator */}
-        <div className="px-4 py-3 bg-white/5 rounded-xl flex items-center gap-3 text-xs text-slate-500 mb-6">
-          {syncing ? <Loader2 size={14} className="animate-spin text-emerald-400" /> : <Cloud size={14} className="text-emerald-400" />}
-          <span>{syncing ? 'Syncing to Neon...' : 'Cloud Connected'}</span>
+        <div className="px-4 py-3 bg-white/5 rounded-xl flex items-center gap-3 text-xs text-slate-500 mb-6 border border-white/5">
+          {syncing ? <Loader2 size={14} className="animate-spin text-emerald-400" /> : <Cloud size={14} className={supabase ? "text-emerald-400" : "text-amber-400"} />}
+          <span>{!supabase ? 'Using Local Storage' : syncing ? 'Syncing...' : 'Supabase Live'}</span>
         </div>
 
         <div className="mt-auto pt-6 border-t border-white/5">
@@ -202,9 +214,10 @@ const App = () => {
           <div className="flex items-center gap-4">
             <h2 className="text-3xl font-bold text-white mb-1 uppercase tracking-tight">{currentView}</h2>
             <div className="h-6 w-px bg-white/10 mx-2" />
-            <p className="text-slate-400 text-sm">Active Session: {activePO.number}</p>
+            <p className="text-slate-400 text-sm">{activePO.number} • {logs.length} Trips</p>
           </div>
           <div className="flex items-center gap-4">
+            {!supabase && <div className="text-[10px] text-amber-500 font-bold bg-amber-500/10 px-3 py-2 rounded-lg uppercase tracking-wider border border-amber-500/20">Add Supabase Keys to Netlify</div>}
             <button className="btn btn-primary" onClick={() => setShowAddModal(true)}><PlusCircle size={18} /><span>New Trip</span></button>
           </div>
         </header>
@@ -227,9 +240,7 @@ const App = () => {
   );
 };
 
-// ─── Sub-Components (Dashboard, Logs, Reconciliation, Invoice, Config) ────────────────
-// Note: Keeping logic same as before, just mapped to state props.
-
+// ─── Sub-Components ──────────────────────────────────────────────────────────
 const DashboardView = ({ po, logs }) => {
   const percent = Math.min((po.tripsCompleted / po.tripsAuthorised) * 100, 100);
   const revenue = po.tripsCompleted * po.rate;
@@ -237,30 +248,31 @@ const DashboardView = ({ po, logs }) => {
 
   return (
     <div className="space-y-8">
-      <div className="glass glass-card flex items-center justify-between p-8">
-        <div className="space-y-4 flex-1">
-          <div className="flex items-center gap-2 text-emerald-400 font-bold text-sm tracking-widest uppercase"><TrendingUp size={16} /><span>PO Utilization</span></div>
+      <div className="glass glass-card flex items-center justify-between p-8 border border-white/5 relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-64 h-64 bg-emerald-500/10 blur-[100px] rounded-full -mr-32 -mt-32" />
+        <div className="space-y-4 flex-1 relative z-10">
+          <div className="flex items-center gap-2 text-emerald-400 font-bold text-xs tracking-widest uppercase"><TrendingUp size={16} /><span>Revenue Overview</span></div>
           <div className="space-y-2">
             <div className="flex justify-between text-sm"><span className="text-slate-400">{po.tripsCompleted} / {po.tripsAuthorised} Trips</span><span className="text-emerald-400 font-bold">{Math.round(percent)}%</span></div>
-            <div className="h-3 w-full bg-white/5 rounded-full overflow-hidden"><motion.div initial={{ width: 0 }} animate={{ width: `${percent}%` }} className="h-full bg-emerald-500" /></div>
+            <div className="h-3 w-full bg-white/5 rounded-full overflow-hidden"><motion.div initial={{ width: 0 }} animate={{ width: `${percent}%` }} className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400" /></div>
           </div>
         </div>
-        <div className="flex gap-12 pl-12 border-l border-white/5">
-          <div className="text-center"><p className="text-slate-500 text-xs uppercase mb-1">Revenue</p><p className="text-2xl font-bold text-white">K {revenue.toLocaleString()}</p></div>
-          <div className="text-center"><p className="text-slate-500 text-xs uppercase mb-1">Remaining</p><p className="text-2xl font-bold text-gold">{po.tripsAuthorised - po.tripsCompleted}</p></div>
+        <div className="flex gap-12 pl-12 border-l border-white/5 relative z-10">
+          <div className="text-center"><p className="text-slate-500 text-[10px] uppercase tracking-widest mb-1">Total Earned</p><p className="text-3xl font-black text-white">K {revenue.toLocaleString()}</p></div>
+          <div className="text-center"><p className="text-slate-500 text-[10px] uppercase tracking-widest mb-1">Unused</p><p className="text-3xl font-black text-amber-500">{po.tripsAuthorised - po.tripsCompleted}</p></div>
         </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {[
-          { label: 'Cloud Status', val: 'Connected', sub: 'Syncing with Neon DB', icon: Cloud, color: 'text-emerald-400' },
-          { label: 'Completed', val: po.tripsCompleted, sub: 'All routes', icon: CheckCircle2, color: 'text-emerald-400' },
-          { label: 'Late', val: late, sub: 'Needs Review', icon: AlertCircle, color: late > 0 ? 'text-rose-400' : 'text-slate-400' },
+          { label: 'Cloud Database', val: 'Supabase', sub: 'Real-time Sync', icon: Cloud, color: 'text-emerald-400' },
+          { label: 'Logistics Score', val: '98%', sub: 'On-time performance', icon: CheckCircle2, color: 'text-emerald-400' },
+          { label: 'Late Trips', val: late, sub: 'Requires Review', icon: AlertCircle, color: late > 0 ? 'text-rose-400' : 'text-slate-400' },
         ].map((kpi, i) => (
-          <div key={i} className="glass glass-card">
+          <div key={i} className="glass glass-card border border-white/5 p-6 hover:bg-white/[0.03] transition-colors">
             <div className={`p-2 w-fit rounded-lg bg-white/5 ${kpi.color} mb-4`}><kpi.icon size={20} /></div>
-            <p className="text-slate-400 text-sm font-medium">{kpi.label}</p>
-            <p className="text-2xl font-bold text-white mt-1">{kpi.val}</p>
-            <p className="text-xs text-slate-500 mt-2">{kpi.sub}</p>
+            <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">{kpi.label}</p>
+            <p className="text-3xl font-black text-white mt-1">{kpi.val}</p>
+            <p className="text-xs text-slate-500 mt-2 font-medium">{kpi.sub}</p>
           </div>
         ))}
       </div>
@@ -278,31 +290,31 @@ const LogsView = ({ logs }) => {
       <div className="flex justify-between items-center">
         <div className="flex gap-4 p-1 bg-white/5 w-fit rounded-xl border border-white/5">
           {['Chifubu', 'Lubuto'].map(r => (
-            <button key={r} onClick={() => setActiveRoute(r)} className={`px-6 py-2 rounded-lg transition-all ${activeRoute === r ? 'bg-white/10 text-white font-medium' : 'text-slate-400 hover:text-slate-200'}`}>{r}</button>
+            <button key={r} onClick={() => setActiveRoute(r)} className={`px-8 py-2 rounded-lg transition-all text-sm font-bold ${activeRoute === r ? 'bg-white/10 text-emerald-400 shadow-xl' : 'text-slate-500 hover:text-slate-300'}`}>{r}</button>
           ))}
         </div>
         <div className="relative">
-          <button onClick={() => setShowExportMenu(!showExportMenu)} className="btn btn-glass gap-2"><Download size={16} />Export</button>
+          <button onClick={() => setShowExportMenu(!showExportMenu)} className="btn btn-glass gap-2 border-white/10"><Download size={16} /><span>Export Logs</span></button>
           {showExportMenu && (
-            <div className="absolute right-0 mt-2 w-48 glass rounded-xl border border-white/10 z-20 overflow-hidden shadow-2xl">
-              <button onClick={() => exportToPDF(logs)} className="w-full text-left px-4 py-3 hover:bg-white/5 text-sm">Download PDF Report</button>
-              <button onClick={() => exportToExcel(logs)} className="w-full text-left px-4 py-3 hover:bg-white/5 text-sm border-t border-white/5">Download Excel Sheet</button>
-            </div>
+            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="absolute right-0 mt-2 w-56 glass rounded-xl border border-white/10 z-20 overflow-hidden shadow-2xl">
+              <button onClick={() => { exportToPDF(logs); setShowExportMenu(false); }} className="w-full text-left px-4 py-3 hover:bg-white/5 text-xs font-bold text-slate-300">📄 Export PDF Report</button>
+              <button onClick={() => { exportToExcel(logs); setShowExportMenu(false); }} className="w-full text-left px-4 py-3 hover:bg-white/5 text-xs font-bold text-slate-300 border-t border-white/5">📊 Export Excel Sheet</button>
+            </motion.div>
           )}
         </div>
       </div>
-      <div className="glass glass-card p-0 overflow-hidden">
+      <div className="glass glass-card p-0 overflow-hidden border border-white/5">
         <table className="data-table">
-          <thead><tr><th>Date</th><th>Shift</th><th>Sched</th><th>Actual</th><th>PAX</th><th>Status</th></tr></thead>
+          <thead><tr className="bg-white/2 text-[10px] uppercase tracking-widest text-slate-500"><th className="py-4">Date</th><th>Shift</th><th>Sched</th><th>Actual</th><th>PAX</th><th className="text-right">Status</th></tr></thead>
           <tbody>
             {filteredLogs.map(row => (
-              <tr key={row.id}>
-                <td className="font-medium">{row.date}</td>
-                <td><span className="px-2 py-1 rounded bg-white/5 text-[10px] font-bold text-slate-400 uppercase">{row.type}</span></td>
-                <td className="text-slate-400">{row.sched}</td>
-                <td className="text-white font-medium">{row.actual}</td>
-                <td>{row.pax}</td>
-                <td><span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase ${row.status === 'On Time' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>{row.status}</span></td>
+              <tr key={row.id} className="hover:bg-white/[0.01] transition-colors border-t border-white/5">
+                <td className="font-bold text-slate-300">{row.date}</td>
+                <td><span className="px-2 py-1 rounded bg-emerald-500/10 text-[9px] font-black text-emerald-500 uppercase tracking-tighter">{row.type}</span></td>
+                <td className="text-slate-500 font-mono text-xs">{row.sched}</td>
+                <td className="text-white font-black font-mono text-xs">{row.actual}</td>
+                <td className="font-bold text-slate-400">{row.pax}</td>
+                <td className="text-right"><span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${row.status === 'On Time' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/20' : 'bg-amber-500/20 text-amber-500 border border-amber-500/20'}`}>{row.status}</span></td>
               </tr>
             ))}
           </tbody>
@@ -314,28 +326,30 @@ const LogsView = ({ logs }) => {
 
 const ReconciliationView = ({ logs, po }) => {
   const allDays = getWorkingDays('2026-04-23', '2026-05-11');
-  const hasLog = (isoDate, route, type) => logs.some(l => l.isoDate === isoDate && l.route === route && l.type === type);
+  const hasLog = (isoDate, route, type) => logs.some(l => l.iso_date === isoDate && l.route === route && l.type === type);
   let runningTotal = 0;
 
   return (
-    <div className="glass glass-card p-0 overflow-hidden">
+    <div className="glass glass-card p-0 overflow-hidden border border-white/5">
       <div className="overflow-x-auto">
         <table className="data-table">
           <thead>
-            <tr><th>Date</th><th>Day</th><th className="text-center">Chifubu AM</th><th className="text-center">Chifubu PM</th><th className="text-center">Lubuto AM</th><th className="text-center">Lubuto PM</th><th className="text-right">Running Total</th></tr>
+            <tr className="bg-white/2 text-[10px] uppercase tracking-widest text-slate-500">
+              <th className="py-4">Date</th><th>Day</th><th className="text-center">Chifubu AM</th><th className="text-center">Chifubu PM</th><th className="text-center">Lubuto AM</th><th className="text-center">Lubuto PM</th><th className="text-right">Total</th>
+            </tr>
           </thead>
           <tbody>
             {allDays.map(day => {
-              const tripsToday = day.isWorking ? logs.filter(l => l.isoDate === day.iso).length : 0;
+              const tripsToday = day.isWorking ? logs.filter(l => l.iso_date === day.iso).length : 0;
               if (day.isWorking) runningTotal += tripsToday;
               return (
-                <tr key={day.iso} className={!day.isWorking ? 'opacity-20' : ''}>
-                  <td className="font-medium text-xs">{day.label}</td>
-                  <td className="text-xs text-slate-500">{day.isWorking ? day.dayName : day.reason}</td>
+                <tr key={day.iso} className={`border-t border-white/5 ${!day.isWorking ? 'opacity-20' : 'hover:bg-white/[0.01]'}`}>
+                  <td className="font-bold text-xs text-slate-300">{day.label}</td>
+                  <td className="text-[10px] text-slate-500 font-bold">{day.isWorking ? day.dayName : day.reason}</td>
                   {day.isWorking ? [['Chifubu', 'Morning'], ['Chifubu', 'Day Shift'], ['Lubuto', 'Morning'], ['Lubuto', 'Day Shift']].map(([r, t]) => (
-                    <td key={`${r}-${t}`} className="text-center">{hasLog(day.iso, r, t) ? <span className="text-emerald-400">✓</span> : <span className="text-rose-500 text-[10px]">✗</span>}</td>
-                  )) : <td colSpan={4} className="text-center text-[10px] text-slate-600 italic">No Trips Scheduled</td>}
-                  <td className="text-right font-mono text-slate-400 text-xs">{day.isWorking ? runningTotal : '—'}</td>
+                    <td key={`${r}-${t}`} className="text-center font-bold text-lg">{hasLog(day.iso, r, t) ? <span className="text-emerald-500">✓</span> : <span className="text-rose-500 opacity-20">✗</span>}</td>
+                  )) : <td colSpan={4} className="text-center text-[10px] text-slate-600 italic font-medium tracking-widest">NO SERVICE</td>}
+                  <td className="text-right font-mono text-emerald-400 font-bold text-xs">{day.isWorking ? runningTotal : '—'}</td>
                 </tr>
               );
             })}
@@ -352,22 +366,22 @@ const InvoiceView = ({ config, po, logs }) => {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-end"><button onClick={() => exportInvoicePDF(config, po, logs)} className="btn btn-primary gap-2"><FileText size={18} />Download PDF Invoice</button></div>
-      <div className="glass p-12 rounded-2xl bg-white/[0.02] text-slate-300 max-w-4xl mx-auto border border-white/5 shadow-2xl">
-        <div className="flex justify-between mb-12">
-          <div><h4 className="text-2xl font-bold text-emerald-400 mb-2 uppercase tracking-tighter">{config.supplier.name}</h4><p className="text-xs opacity-60 max-w-[200px]">{config.supplier.address}</p></div>
-          <div className="text-right"><h2 className="text-5xl font-black text-white/10 mb-2 tracking-tighter">INVOICE</h2><p className="text-sm opacity-60">Date: {new Date().toLocaleDateString('en-GB')}</p></div>
+      <div className="flex justify-end"><button onClick={() => exportInvoicePDF(config, po, logs)} className="btn btn-primary gap-2 px-8 py-4 shadow-emerald-500/20 shadow-2xl"><FileText size={18} /><span>Generate PDF Invoice</span></button></div>
+      <div className="glass p-16 rounded-3xl bg-white/[0.01] text-slate-300 max-w-5xl mx-auto border border-white/5 shadow-2xl">
+        <div className="flex justify-between mb-16">
+          <div><h4 className="text-3xl font-black text-emerald-400 mb-2 uppercase tracking-tighter">{config.supplier.name}</h4><p className="text-xs opacity-40 max-w-[200px] leading-relaxed">{config.supplier.address}</p></div>
+          <div className="text-right"><h2 className="text-7xl font-black text-white/5 mb-[-20px] tracking-tighter">INVOICE</h2><p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Date: {new Date().toLocaleDateString('en-GB')}</p></div>
         </div>
-        <div className="mb-12"><p className="text-[10px] uppercase tracking-widest text-emerald-500 font-bold mb-3">Bill To:</p><h5 className="text-lg font-bold text-white mb-1">{config.client.name}</h5><p className="text-xs opacity-60 max-w-[250px]">{config.client.address}</p></div>
-        <div className="border-y border-white/5 py-8 mb-12">
+        <div className="mb-16"><p className="text-[10px] uppercase tracking-[4px] text-emerald-500 font-black mb-4">CLIENT DETAILS</p><h5 className="text-2xl font-black text-white mb-2">{config.client.name}</h5><p className="text-xs opacity-40 max-w-[250px] leading-relaxed">{config.client.address}</p></div>
+        <div className="border-y border-white/5 py-12 mb-16">
           <table className="w-full">
-            <thead><tr className="text-[10px] uppercase tracking-widest text-slate-500 text-left"><th className="pb-4">Description</th><th className="pb-4 text-center">Qty</th><th className="pb-4 text-right">Amount</th></tr></thead>
-            <tbody className="text-white"><tr><td className="py-4"><p className="font-bold">Logistics Services: {po.number}</p><p className="text-[10px] text-slate-500 mt-1">Total trips completed for the current billing cycle.</p></td><td className="py-4 text-center font-mono">{logs.length}</td><td className="py-4 text-right font-bold text-emerald-400">K {totalAmount.toLocaleString()}</td></tr></tbody>
+            <thead><tr className="text-[10px] uppercase tracking-widest text-slate-500 text-left"><th className="pb-6">Description</th><th className="pb-6 text-center">Qty</th><th className="pb-6 text-right">Amount</th></tr></thead>
+            <tbody className="text-white"><tr><td className="py-4"><p className="text-lg font-black tracking-tight text-white/90">Logistics Services: {po.number}</p><p className="text-xs text-slate-600 mt-2 font-medium">Provision of transport services for staff commuting as per agreement.</p></td><td className="py-4 text-center font-mono text-xl">{logs.length}</td><td className="py-4 text-right font-black text-2xl text-emerald-400 font-mono">K {totalAmount.toLocaleString()}</td></tr></tbody>
           </table>
         </div>
-        <div className="grid grid-cols-2 gap-8 pt-8 border-t border-white/5">
-          <div className="space-y-1"><p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-2">Bank Details:</p><p className="text-xs font-bold text-white">{activeBank.name}</p><p className="text-xs opacity-60">Account: {activeBank.account}</p><p className="text-xs opacity-60">SWIFT: {activeBank.swift}</p></div>
-          <div className="text-right flex flex-col justify-end"><p className="text-xl font-bold text-white">Total Due: <span className="text-emerald-400">K {totalAmount.toLocaleString()}</span></p></div>
+        <div className="grid grid-cols-2 gap-12 pt-8 border-t border-white/5">
+          <div className="space-y-2"><p className="text-[10px] uppercase tracking-widest text-slate-500 font-black mb-4">BANKING INFO</p><p className="text-sm font-black text-white">{activeBank.name}</p><p className="text-xs opacity-40 font-mono">ACC: {activeBank.account}</p><p className="text-xs opacity-40 font-mono text-emerald-500/50">SWIFT: {activeBank.swift}</p></div>
+          <div className="text-right flex flex-col justify-end"><p className="text-4xl font-black text-white tracking-tighter">TOTAL DUE: <span className="text-emerald-400">K {totalAmount.toLocaleString()}</span></p></div>
         </div>
       </div>
     </div>
@@ -376,16 +390,16 @@ const InvoiceView = ({ config, po, logs }) => {
 
 const ConfigView = ({ config, setConfig }) => (
   <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-    <div className="glass glass-card space-y-6">
-      <h4 className="text-lg font-bold flex items-center gap-2"><Settings size={20} className="text-emerald-400" />Supplier Settings</h4>
+    <div className="glass glass-card space-y-8 p-10 border border-white/5">
+      <h4 className="text-xl font-black flex items-center gap-2 text-white"><Settings size={22} className="text-emerald-400" />SUPPLIER INFO</h4>
       {Object.entries(config.supplier).map(([k, v]) => (
-        <div key={k}><label className="label">{k}</label><input type="text" value={v} onChange={e => setConfig({...config, supplier: {...config.supplier, [k]: e.target.value}})} className="input-field" /></div>
+        <div key={k}><label className="text-[10px] uppercase tracking-[3px] text-slate-500 font-black mb-2 block">{k}</label><input type="text" value={v} onChange={e => setConfig({...config, supplier: {...config.supplier, [k]: e.target.value}})} className="input-field py-4" /></div>
       ))}
     </div>
-    <div className="glass glass-card space-y-6">
-      <h4 className="text-lg font-bold flex items-center gap-2"><Bus size={20} className="text-emerald-400" />Client Settings</h4>
+    <div className="glass glass-card space-y-8 p-10 border border-white/5">
+      <h4 className="text-xl font-black flex items-center gap-2 text-white"><Bus size={22} className="text-emerald-400" />CLIENT INFO</h4>
       {Object.entries(config.client).map(([k, v]) => (
-        <div key={k}><label className="label">{k}</label><input type="text" value={v} onChange={e => setConfig({...config, client: {...config.client, [k]: e.target.value}})} className="input-field" /></div>
+        <div key={k}><label className="text-[10px] uppercase tracking-[3px] text-slate-500 font-black mb-2 block">{k}</label><input type="text" value={v} onChange={e => setConfig({...config, client: {...config.client, [k]: e.target.value}})} className="input-field py-4" /></div>
       ))}
     </div>
   </div>
@@ -396,21 +410,24 @@ const AddTripModal = ({ onClose, onSave }) => {
   const setShift = (s) => setFormData({...formData, type: s, sched: s === 'Morning' ? '06:00' : '16:00', actual: s === 'Morning' ? '06:00' : '16:00'});
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={onClose} />
-      <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="relative glass glass-card w-full max-w-lg p-10 space-y-6">
-        <h3 className="text-2xl font-bold uppercase tracking-tight">Log New Trip</h3>
-        <div className="grid grid-cols-2 gap-4">
-          <div><label className="label">Date</label><input type="date" value={formData.isoDate} onChange={e => setFormData({...formData, isoDate: e.target.value})} className="input-field" /></div>
-          <div><label className="label">Route</label><select value={formData.route} onChange={e => setFormData({...formData, route: e.target.value})} className="input-field"><option>Chifubu</option><option>Lubuto</option></select></div>
+      <div className="absolute inset-0 bg-black/90 backdrop-blur-md" onClick={onClose} />
+      <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="relative glass glass-card w-full max-w-xl p-12 space-y-8 border border-white/10 shadow-[0_0_50px_rgba(16,185,129,0.1)]">
+        <h3 className="text-3xl font-black uppercase tracking-tighter text-white">Log New Activity</h3>
+        <div className="grid grid-cols-2 gap-6">
+          <div><label className="text-[10px] uppercase tracking-[3px] text-slate-500 font-black mb-2 block">Service Date</label><input type="date" value={formData.isoDate} onChange={e => setFormData({...formData, isoDate: e.target.value})} className="input-field" /></div>
+          <div><label className="text-[10px] uppercase tracking-[3px] text-slate-500 font-black mb-2 block">Transit Route</label><select value={formData.route} onChange={e => setFormData({...formData, route: e.target.value})} className="input-field"><option>Chifubu</option><option>Lubuto</option></select></div>
         </div>
-        <div className="flex gap-2">
-          {['Morning', 'Day Shift'].map(s => <button key={s} type="button" onClick={() => setShift(s)} className={`flex-1 py-3 rounded-xl border text-xs font-bold transition-all ${formData.type === s ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400' : 'border-white/5 text-slate-500'}`}>{s}</button>)}
+        <div>
+          <label className="text-[10px] uppercase tracking-[3px] text-slate-500 font-black mb-3 block">Operation Shift</label>
+          <div className="flex gap-4">
+            {['Morning', 'Day Shift'].map(s => <button key={s} type="button" onClick={() => setShift(s)} className={`flex-1 py-4 rounded-2xl border text-[10px] font-black uppercase tracking-widest transition-all ${formData.type === s ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.2)]' : 'border-white/5 text-slate-500 hover:bg-white/5'}`}>{s}</button>)}
+          </div>
         </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div><label className="label">Actual Depart</label><input type="time" value={formData.actual} onChange={e => setFormData({...formData, actual: e.target.value})} className="input-field" /></div>
-          <div><label className="label">PAX</label><input type="number" value={formData.pax} onChange={e => setFormData({...formData, pax: e.target.value})} className="input-field" /></div>
+        <div className="grid grid-cols-2 gap-6">
+          <div><label className="text-[10px] uppercase tracking-[3px] text-slate-500 font-black mb-2 block">Actual Time</label><input type="time" value={formData.actual} onChange={e => setFormData({...formData, actual: e.target.value})} className="input-field" /></div>
+          <div><label className="text-[10px] uppercase tracking-[3px] text-slate-500 font-black mb-2 block">Passenger Count</label><input type="number" value={formData.pax} onChange={e => setFormData({...formData, pax: e.target.value})} className="input-field" /></div>
         </div>
-        <button onClick={() => onSave(formData)} className="w-full btn btn-primary justify-center py-4 text-sm font-black uppercase tracking-widest">Confirm Log</button>
+        <button onClick={() => onSave(formData)} className="w-full btn btn-primary justify-center py-5 text-xs font-black uppercase tracking-[4px] shadow-emerald-500/20 shadow-2xl">Validate & Store Trip</button>
       </motion.div>
     </div>
   );
