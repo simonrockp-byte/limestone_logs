@@ -114,6 +114,7 @@ const App = () => {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [editingLog, setEditingLog] = useState(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -149,6 +150,17 @@ const App = () => {
     setSyncing(false);
   };
 
+  const deleteLog = async (id) => {
+    setSyncing(true);
+    if (supabase) {
+      const { error } = await supabase.from('trip_logs').delete().eq('id', id);
+      if (!error) setLogs(logs.filter(l => l.id !== id));
+    } else {
+      setLogs(logs.filter(l => l.id !== id));
+    }
+    setSyncing(false);
+  };
+
   const saveConfig = async (newConfig) => {
     if (!supabase) return;
     setSyncing(true);
@@ -160,11 +172,18 @@ const App = () => {
   const addTrip = (trip) => {
     const newLog = {
       ...trip,
-      id: `${trip.isoDate}-${trip.route}-${trip.type}-${Date.now()}`,
+      id: trip.id || `${trip.isoDate}-${trip.route}-${trip.type}-${Date.now()}`,
       status: trip.actual <= trip.sched ? 'On Time' : 'Late',
       date: new Date(trip.isoDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }),
     };
-    setLogs([newLog, ...logs]);
+    
+    if (editingLog) {
+      setLogs(logs.map(l => l.id === editingLog.id ? newLog : l));
+      setEditingLog(null);
+    } else {
+      setLogs([newLog, ...logs]);
+    }
+    
     setShowAddModal(false);
     saveLog(newLog);
   };
@@ -361,7 +380,7 @@ const App = () => {
             transition={{ duration: 0.18 }}
           >
             {currentView === 'dashboard' && <DashboardView po={activePO} logs={logs} onSync={syncScheduledTrips} syncing={syncing} />}
-            {currentView === 'logs'      && <LogsView logs={logs} />}
+            {currentView === 'logs'      && <LogsView logs={logs} onDelete={deleteLog} onEdit={(l) => { setEditingLog(l); setShowAddModal(true); }} />}
             {currentView === 'pos'       && <ReconciliationView logs={logs} po={activePO} />}
             {currentView === 'invoices'  && <InvoiceView config={config} po={activePO} logs={logs} />}
             {currentView === 'config'    && <ConfigView config={config} setConfig={c => { setConfig(c); saveConfig(c); }} />}
@@ -369,7 +388,7 @@ const App = () => {
         </AnimatePresence>
 
         <AnimatePresence>
-          {showAddModal && <AddTripModal onClose={() => setShowAddModal(false)} onSave={addTrip} />}
+          {showAddModal && <AddTripModal log={editingLog} onClose={() => { setShowAddModal(false); setEditingLog(null); }} onSave={addTrip} />}
         </AnimatePresence>
       </main>
     </div>
@@ -512,7 +531,7 @@ const LogsView = ({ logs }) => {
         <table className="data-table">
           <thead>
             <tr>
-              <th>Date</th><th>Shift</th><th>Scheduled</th><th>Actual</th><th>PAX</th><th style={{ textAlign: 'right' }}>Status</th>
+              <th>Date</th><th>Shift</th><th>Scheduled</th><th>Actual</th><th>PAX</th><th>Status</th><th style={{ textAlign: 'right' }}>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -529,7 +548,7 @@ const LogsView = ({ logs }) => {
                   <td style={{ color: '#64748b', fontFamily: 'monospace', fontSize: 12 }}>{row.sched}</td>
                   <td style={{ color: '#fff', fontWeight: 700, fontFamily: 'monospace', fontSize: 12 }}>{row.actual}</td>
                   <td style={{ color: '#94a3b8', fontWeight: 600 }}>{row.pax}</td>
-                  <td style={{ textAlign: 'right' }}>
+                  <td>
                     <span style={{
                       padding: '3px 10px', borderRadius: 99, fontSize: 10, fontWeight: 800,
                       textTransform: 'uppercase', letterSpacing: '0.06em',
@@ -539,6 +558,12 @@ const LogsView = ({ logs }) => {
                     }}>
                       {row.status}
                     </span>
+                  </td>
+                  <td style={{ textAlign: 'right' }}>
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                      <button onClick={() => onEdit(row)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }}><Settings size={14} /></button>
+                      <button onClick={() => onDelete(row.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#f43f5e' }}><X size={14} /></button>
+                    </div>
                   </td>
                 </tr>
               ))
@@ -722,8 +747,8 @@ const ConfigView = ({ config, setConfig }) => (
 );
 
 // ─── Add Trip Modal ───────────────────────────────────────────────────────────
-const AddTripModal = ({ onClose, onSave }) => {
-  const [form, setForm] = useState({
+const AddTripModal = ({ log, onClose, onSave }) => {
+  const [form, setForm] = useState(log || {
     isoDate: new Date().toISOString().split('T')[0],
     route: 'Chifubu',
     type: 'Morning',
