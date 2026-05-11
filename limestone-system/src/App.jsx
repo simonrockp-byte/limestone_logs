@@ -109,7 +109,7 @@ const App = () => {
       const logData = logResult.status === 'fulfilled' ? logResult.value.data : null;
       const configData = configResult.status === 'fulfilled' ? configResult.value.data : null;
 
-      if (poData?.length) { setPos(poData); setActivePoId(poData[0].id); }
+      if (poData?.length) { setPos(poData); setActivePoId(poData[0].number || poData[0].id); }
       if (logData?.length) setLogs(logData);
       if (configData?.data) setConfig(configData.data);
       setLoading(false);
@@ -183,7 +183,7 @@ const App = () => {
     setSyncing(true);
     const po = { ...newPo, id: `po-${Date.now()}`, status: 'IN PROGRESS' };
     const { error } = await supabase.from('purchase_orders').insert(po);
-    if (!error) { setPos(prev => [po, ...prev]); setActivePoId(po.id); toast('New PO created'); }
+    if (!error) { setPos(prev => [po, ...prev]); setActivePoId(po.number); toast('New PO created'); }
     else toast('PO creation failed', 'error');
     setShowPoModal(false);
     setSyncing(false);
@@ -220,7 +220,7 @@ const App = () => {
     setSyncing(false);
   };
 
-  const activePO = pos.find(p => p.id === activePoId) || DEFAULT_PO;
+  const activePO = pos.find(p => (p.number || p.id) === activePoId) || DEFAULT_PO;
   const filteredLogs = logs.filter(l => !l.po_id || l.po_id === activePoId);
   const poWithStats = { ...activePO, tripsCompleted: filteredLogs.length };
   const utilPct = filteredLogs.length / (activePO.trips_authorised || 63) * 100;
@@ -292,7 +292,7 @@ const App = () => {
               <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider">PO</span>
               <select value={activePoId} onChange={e => setActivePoId(e.target.value)}
                 className="bg-transparent text-emerald-400 text-xs font-bold border-none outline-none cursor-pointer">
-                {pos.map(p => <option key={p.id} value={p.id}>{p.number}</option>)}
+                {pos.map(p => <option key={p.id} value={p.number || p.id}>{p.number}</option>)}
               </select>
               <ChevronDown size={10} className="text-slate-500" />
             </div>
@@ -498,10 +498,10 @@ const PoManagementView = ({ pos, activePoId, onSwitch, onCreate, filteredLogs })
     {pos.map(po => {
       const tripCount = filteredLogs.length;
       const pct = Math.min((tripCount / (po.trips_authorised || 1)) * 100, 100);
-      const isActive = activePoId === po.id;
+      const isActive = activePoId === (po.number || po.id);
       const isWarn = pct >= 80;
       return (
-        <div key={po.id} onClick={() => onSwitch(po.id)}
+        <div key={po.id} onClick={() => onSwitch(po.number || po.id)}
           className={`glass glass-card p-6 border transition-all cursor-pointer ${isActive ? 'border-emerald-500/40' : 'border-white/5 hover:border-white/20'}`}>
           <div className="flex justify-between items-start mb-4">
             <h4 className="text-lg font-black text-white">{po.number}</h4>
