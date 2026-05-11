@@ -94,21 +94,36 @@ const App = () => {
       }
 
       try {
-        const { data: logData, error: logError } = await supabase
-          .from('trip_logs')
-          .select('*')
-          .order('iso_date', { ascending: false });
+        const { data: logData } = await supabase.from('trip_logs').select('*').order('iso_date', { ascending: false });
+        const { data: configData } = await supabase.from('system_config').select('data').eq('id', 'main_config').single();
 
-        const { data: configData, error: configError } = await supabase
-          .from('system_config')
-          .select('data')
-          .eq('id', 'main_config')
-          .single();
+        if (logData && logData.length > 0) {
+          setLogs(logData);
+        } else {
+          // DATABASE IS EMPTY - Migration Logic
+          console.log("Database empty. Migrating reconciled logs...");
+          setSyncing(true);
+          const { data: seedData, error: seedError } = await supabase.from('trip_logs').insert(
+            // Map seed logs to database format
+            SEED_LOGS.map(l => ({
+              id: l.id, date: l.date, iso_date: l.isoDate, route: l.route, type: l.type, 
+              sched: l.sched, actual: l.actual, pax: parseInt(l.pax), status: l.status
+            }))
+          ).select();
+          
+          if (!seedError) {
+            setLogs(seedData);
+          } else {
+            console.error("Migration failed:", seedError);
+            setLogs(SEED_LOGS);
+          }
+          setSyncing(false);
+        }
 
-        if (logData && logData.length > 0) setLogs(logData);
         if (configData) setConfig(configData.data);
       } catch (err) {
         console.error("Supabase fetch failed:", err);
+        setLogs(SEED_LOGS);
       } finally {
         setLoading(false);
       }
