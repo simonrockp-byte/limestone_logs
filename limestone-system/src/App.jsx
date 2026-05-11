@@ -146,7 +146,7 @@ const App = () => {
     workingDays.forEach(day => {
       ['Chifubu', 'Lubuto'].forEach(route => {
         [{ type: 'Morning', sched: '06:00' }, { type: 'Day Shift', sched: '16:00' }].forEach(shift => {
-          const exists = logs.some(l => l.iso_date === day.iso && l.route === route && l.type === shift.type && l.po_id === activePoId);
+          const exists = logs.some(l => l.iso_date === day.iso && l.route === route && l.type === shift.type && (!l.po_id || l.po_id === activePoId));
           if (!exists) {
             newTrips.push({
               id: `${day.iso}-${route}-${shift.type}-${Date.now()}`,
@@ -166,7 +166,8 @@ const App = () => {
   };
 
   const activePO = pos.find(p => p.id === activePoId) || DEFAULT_PO;
-  const filteredLogs = logs.filter(l => l.po_id === activePoId || (!l.po_id && activePoId === 'po-001'));
+  // Show logs that match the active PO, OR any log with no po_id (legacy data before multi-PO)
+  const filteredLogs = logs.filter(l => !l.po_id || l.po_id === activePoId);
   const poWithStats = { ...activePO, tripsCompleted: filteredLogs.length };
 
   if (loading) return (
