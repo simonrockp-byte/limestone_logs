@@ -24,17 +24,6 @@ const INITIAL_CONFIG = {
 const DEFAULT_PO = { id: 'po-001', number: "PO-001", start_date: "2026-04-23", trips_authorised: 63, rate: 790, status: "IN PROGRESS" };
 const PUBLIC_HOLIDAYS = ['2026-04-28', '2026-05-01'];
 
-// ─── Seed Data (Historical Reconciliation) ───────────────────────────────────
-const SEED_LOGS = [
-  // Chifubu Morning Trips (Apr 23 - May 11)
-  ...['2026-04-23','2026-04-24','2026-04-27','2026-04-29','2026-04-30','2026-05-04','2026-05-05','2026-05-06','2026-05-07','2026-05-08','2026-05-11'].map(d => ({id:`${d}-C-M`, isoDate:d, route:'Chifubu', type:'Morning', sched:'06:00', actual:'06:00', pax:42, po_id:'po-001'})),
-  // Chifubu Day Shift
-  ...['2026-04-23','2026-04-24','2026-04-27','2026-04-29','2026-04-30','2026-05-04','2026-05-05','2026-05-06','2026-05-07','2026-05-08','2026-05-11'].map(d => ({id:`${d}-C-D`, isoDate:d, route:'Chifubu', type:'Day Shift', sched:'16:00', actual:'16:00', pax:42, po_id:'po-001'})),
-  // Lubuto Morning
-  ...['2026-04-23','2026-04-24','2026-04-27','2026-04-29','2026-04-30','2026-05-04','2026-05-05','2026-05-06','2026-05-07','2026-05-08','2026-05-11'].map(d => ({id:`${d}-L-M`, isoDate:d, route:'Lubuto', type:'Morning', sched:'06:00', actual:'06:00', pax:42, po_id:'po-001'})),
-  // Lubuto Day Shift
-  ...['2026-04-23','2026-04-24','2026-04-27','2026-04-29','2026-04-30','2026-05-04','2026-05-05','2026-05-06','2026-05-07','2026-05-08','2026-05-11'].map(d => ({id:`${d}-L-D`, isoDate:d, route:'Lubuto', type:'Day Shift', sched:'16:00', actual:'16:00', pax:42, po_id:'po-001'}))
-].map(l => ({ ...l, status:'On Time', date: new Date(l.isoDate).toLocaleDateString('en-GB', {day:'numeric', month:'short', year:'numeric'})}));
 
 // ─── Utils ───────────────────────────────────────────────────────────────────
 const getWorkingDays = (start, end) => {
@@ -71,33 +60,29 @@ const App = () => {
         setLoading(false);
         return;
       }
-      try {
-        const { data: poData } = await supabase.from('purchase_orders').select('*').order('created_at', { ascending: false });
-        const { data: logData } = await supabase.from('trip_logs').select('*').order('iso_date', { ascending: false });
-        const { data: configData } = await supabase.from('system_config').select('data').eq('id', 'main_config').single();
+      // Fetch each table independently so one missing table can't block the rest
+      const [poResult, logResult, configResult] = await Promise.allSettled([
+        supabase.from('purchase_orders').select('*').order('created_at', { ascending: false }),
+        supabase.from('trip_logs').select('*').order('iso_date', { ascending: false }),
+        supabase.from('system_config').select('data').eq('id', 'main_config').single(),
+      ]);
 
-        if (poData?.length) {
-          setPos(poData);
-          setActivePoId(poData[0].id);
-        }
-        
-        if (logData?.length) {
-          setLogs(logData);
-        } else if (poData?.length) {
-          // AUTO-MIGRATE SEED DATA
-          console.log("Migrating seed logs to cloud...");
-          setSyncing(true);
-          const { data: migrated } = await supabase.from('trip_logs').insert(SEED_LOGS).select();
-          if (migrated) setLogs(migrated);
-          setSyncing(false);
-        }
+      const poData = poResult.status === 'fulfilled' ? poResult.value.data : null;
+      const logData = logResult.status === 'fulfilled' ? logResult.value.data : null;
+      const configData = configResult.status === 'fulfilled' ? configResult.value.data : null;
 
-        if (configData) setConfig(configData.data);
-      } catch (err) {
-        console.error('Fetch failed:', err);
-      } finally {
-        setLoading(false);
+      if (poData?.length) {
+        setPos(poData);
+        setActivePoId(poData[0].id);
       }
+
+      if (logData?.length) {
+        setLogs(logData);
+      }
+
+      if (configData) setConfig(configData.data);
+
+      setLoading(false);
     };
     fetchData();
   }, []);
