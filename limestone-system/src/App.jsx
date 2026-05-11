@@ -36,7 +36,7 @@ const INITIAL_CONFIG = {
   ],
 };
 
-const INITIAL_PO = { number: 'PO-001', startDate: '2026-04-23', tripsAuthorised: 63, rate: 790, status: 'IN PROGRESS' };
+const DEFAULT_PO = { id: 'po-001', number: 'PO-001', start_date: '2026-04-23', trips_authorised: 63, rate: 790, status: 'IN PROGRESS' };
 const PUBLIC_HOLIDAYS = ['2026-04-28', '2026-05-01'];
 
 const getWorkingDays = (start, end) => {
@@ -111,9 +111,12 @@ const App = () => {
   const [currentView, setCurrentView] = useState('dashboard');
   const [config, setConfig] = useState(INITIAL_CONFIG);
   const [logs, setLogs] = useState([]);
+  const [pos, setPos] = useState([DEFAULT_PO]);
+  const [activePoId, setActivePoId] = useState(DEFAULT_PO.id);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showPoModal, setShowPoModal] = useState(false);
   const [editingLog, setEditingLog] = useState(null);
 
   useEffect(() => {
@@ -125,8 +128,14 @@ const App = () => {
         return;
       }
       try {
+        const { data: poData } = await supabase.from('purchase_orders').select('*').order('created_at', { ascending: false });
         const { data: logData } = await supabase.from('trip_logs').select('*').order('iso_date', { ascending: false });
         const { data: configData } = await supabase.from('system_config').select('data').eq('id', 'main_config').single();
+
+        if (poData?.length) {
+          setPos(poData);
+          setActivePoId(poData[0].id);
+        }
         if (logData?.length) setLogs(logData);
         if (configData) setConfig(configData.data);
       } catch (err) {
@@ -145,6 +154,7 @@ const App = () => {
       id: log.id, date: log.date, iso_date: log.isoDate,
       route: log.route, type: log.type, sched: log.sched,
       actual: log.actual, pax: parseInt(log.pax), status: log.status,
+      po_id: activePoId
     });
     if (error) console.error('Sync error:', error);
     setSyncing(false);
@@ -264,7 +274,27 @@ const App = () => {
     setSyncing(false);
   };
 
-  const activePO = { ...INITIAL_PO, tripsCompleted: logs.length };
+  const addPo = async (newPo) => {
+    setSyncing(true);
+    const po = { ...newPo, id: `po-${Date.now()}` };
+    if (supabase) {
+      const { error } = await supabase.from('purchase_orders').insert(po);
+      if (!error) {
+        setPos([po, ...pos]);
+        setActivePoId(po.id);
+      }
+    } else {
+      setPos([po, ...pos]);
+      setActivePoId(po.id);
+    }
+    setShowPoModal(false);
+    setSyncing(false);
+  };
+
+  const activePO = pos.find(p => p.id === activePoId) || DEFAULT_PO;
+  const filteredLogs = logs.filter(l => l.po_id === activePoId);
+  const activePOTripsCompleted = filteredLogs.length;
+  const poWithStats = { ...activePO, tripsCompleted: activePOTripsCompleted };
 
   if (loading) return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#05060f', color: '#10b981', gap: 16 }}>
@@ -349,22 +379,22 @@ const App = () => {
         <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 36 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             <h2 style={{ fontSize: 22, fontWeight: 800, color: '#fff', textTransform: 'capitalize', letterSpacing: '-0.02em' }}>
-              {currentView === 'pos' ? 'PO Reconciliation' : currentView}
+              {currentView === 'pos' ? 'PO Management' : currentView}
             </h2>
             <span style={{ width: 1, height: 20, background: 'rgba(255,255,255,0.1)' }} />
-            <p style={{ fontSize: 13, color: '#475569' }}>{activePO.number} · {logs.length} trips</p>
+            <select 
+              value={activePoId} 
+              onChange={(e) => setActivePoId(e.target.value)}
+              className="input-field"
+              style={{ padding: '6px 12px', width: 'auto', fontSize: 12, height: 32 }}
+            >
+              {pos.map(p => <option key={p.id} value={p.id}>{p.number}</option>)}
+            </select>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {!supabase && (
-              <span style={{
-                fontSize: 10, fontWeight: 700, color: '#f59e0b',
-                background: 'rgba(245,158,11,0.1)', padding: '6px 12px',
-                borderRadius: 8, border: '1px solid rgba(245,158,11,0.2)',
-                textTransform: 'uppercase', letterSpacing: '0.08em',
-              }}>
-                Add Supabase keys
-              </span>
-            )}
+            <button className="btn btn-glass" style={{ color: '#10b981', borderColor: 'rgba(16,185,129,0.2)' }} onClick={() => setShowPoModal(true)}>
+              <PlusCircle size={16} /> New PO
+            </button>
             <button className="btn btn-primary" onClick={() => setShowAddModal(true)}>
               <PlusCircle size={16} /> New Trip
             </button>
@@ -379,16 +409,17 @@ const App = () => {
             exit={{ opacity: 0, y: -8 }}
             transition={{ duration: 0.18 }}
           >
-            {currentView === 'dashboard' && <DashboardView po={activePO} logs={logs} onSync={syncScheduledTrips} syncing={syncing} />}
-            {currentView === 'logs'      && <LogsView logs={logs} onDelete={deleteLog} onEdit={(l) => { setEditingLog(l); setShowAddModal(true); }} />}
-            {currentView === 'pos'       && <ReconciliationView logs={logs} po={activePO} />}
-            {currentView === 'invoices'  && <InvoiceView config={config} po={activePO} logs={logs} />}
+            {currentView === 'dashboard' && <DashboardView po={poWithStats} logs={filteredLogs} onSync={syncScheduledTrips} syncing={syncing} />}
+            {currentView === 'logs'      && <LogsView logs={filteredLogs} onDelete={deleteLog} onEdit={(l) => { setEditingLog(l); setShowAddModal(true); }} />}
+            {currentView === 'pos'       && <PoManagementView pos={pos} activePoId={activePoId} onSwitch={setActivePoId} />}
+            {currentView === 'invoices'  && <InvoiceView config={config} po={activePO} logs={filteredLogs} />}
             {currentView === 'config'    && <ConfigView config={config} setConfig={c => { setConfig(c); saveConfig(c); }} />}
           </motion.div>
         </AnimatePresence>
 
         <AnimatePresence>
           {showAddModal && <AddTripModal log={editingLog} onClose={() => { setShowAddModal(false); setEditingLog(null); }} onSave={addTrip} />}
+          {showPoModal && <AddPoModal onClose={() => setShowPoModal(false)} onSave={addPo} />}
         </AnimatePresence>
       </main>
     </div>
@@ -473,7 +504,7 @@ const DashboardView = ({ po, logs, onSync, syncing }) => {
 };
 
 // ─── Logs ─────────────────────────────────────────────────────────────────────
-const LogsView = ({ logs }) => {
+const LogsView = ({ logs, onDelete, onEdit }) => {
   const [activeRoute, setActiveRoute] = useState('Chifubu');
   const [showExportMenu, setShowExportMenu] = useState(false);
   const filteredLogs = logs.filter(l => l.route === activeRoute);
@@ -582,40 +613,6 @@ const exportItemStyle = {
   fontFamily: 'Inter, sans-serif', transition: 'background 0.1s',
 };
 
-// ─── Reconciliation ───────────────────────────────────────────────────────────
-const ReconciliationView = ({ logs }) => {
-  const allDays = getWorkingDays('2026-04-23', '2026-05-11');
-  const hasLog = (iso, route, type) => logs.some(l => l.iso_date === iso && l.route === route && l.type === type);
-  let runningTotal = 0;
-
-  return (
-    <div className="glass glass-card" style={{ padding: 0, overflow: 'hidden' }}>
-      <div style={{ overflowX: 'auto' }}>
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Date</th><th>Day</th>
-              <th style={{ textAlign: 'center' }}>Chifubu AM</th>
-              <th style={{ textAlign: 'center' }}>Chifubu PM</th>
-              <th style={{ textAlign: 'center' }}>Lubuto AM</th>
-              <th style={{ textAlign: 'center' }}>Lubuto PM</th>
-              <th style={{ textAlign: 'right' }}>Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            {allDays.map(day => {
-              const tripsToday = day.isWorking ? logs.filter(l => l.iso_date === day.iso).length : 0;
-              if (day.isWorking) runningTotal += tripsToday;
-              return (
-                <tr key={day.iso} style={{ opacity: day.isWorking ? 1 : 0.25 }}>
-                  <td style={{ fontWeight: 600, fontSize: 12, color: '#cbd5e1' }}>{day.label}</td>
-                  <td style={{ fontSize: 11, color: '#475569', fontWeight: 600 }}>
-                    {day.isWorking ? day.dayName : day.reason}
-                  </td>
-                  {day.isWorking
-                    ? [['Chifubu', 'Morning'], ['Chifubu', 'Day Shift'], ['Lubuto', 'Morning'], ['Lubuto', 'Day Shift']].map(([r, t]) => (
-                      <td key={`${r}-${t}`} style={{ textAlign: 'center', fontSize: 16, fontWeight: 700 }}>
-                        {hasLog(day.iso, r, t)
                           ? <span style={{ color: '#10b981' }}>✓</span>
                           : <span style={{ color: '#f43f5e', opacity: 0.3 }}>✗</span>}
                       </td>
