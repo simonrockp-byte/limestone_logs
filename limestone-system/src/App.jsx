@@ -167,7 +167,10 @@ const menuItems = [
 
 const App = () => {
   const [currentView, setCurrentView] = useState('dashboard');
-  const [config] = useState(INITIAL_CONFIG);
+  const [config, setConfig] = useState(() => {
+    const saved = localStorage.getItem('limestone_config');
+    return saved ? JSON.parse(saved) : INITIAL_CONFIG;
+  });
   const [po] = useState(INITIAL_PO);
   const [showAddModal, setShowAddModal] = useState(false);
 
@@ -177,6 +180,10 @@ const App = () => {
   });
 
   useEffect(() => { localStorage.setItem('limestone_logs_v2', JSON.stringify(logs)); }, [logs]);
+
+  useEffect(() => {
+    localStorage.setItem('limestone_config', JSON.stringify(config));
+  }, [config]);
 
   const addTrip = (trip) => {
     const newLog = { ...trip, id: `${trip.isoDate}-${trip.route}-${trip.type}-${Date.now()}`, status: trip.actual <= trip.sched ? 'On Time' : 'Late', date: new Date(trip.isoDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) };
@@ -232,7 +239,7 @@ const App = () => {
             {currentView === 'logs' && <LogsView logs={logs} />}
             {currentView === 'pos' && <ReconciliationView logs={logs} po={activePO} />}
             {currentView === 'invoices' && <InvoiceView config={config} po={activePO} logs={logs} />}
-            {currentView === 'config' && <ConfigView config={config} />}
+            {currentView === 'config' && <ConfigView config={config} setConfig={setConfig} />}
           </motion.div>
         </AnimatePresence>
 
@@ -462,7 +469,7 @@ const ReconciliationView = ({ logs, po }) => {
 };
 
 // ─── Config ──────────────────────────────────────────────────────────────────
-const ConfigView = ({ config }) => (
+const ConfigView = ({ config, setConfig }) => (
   <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
     <div className="glass glass-card">
       <h4 className="text-lg font-bold mb-6 flex items-center gap-2"><Settings size={20} className="text-emerald-400" />Supplier Details</h4>
@@ -470,12 +477,41 @@ const ConfigView = ({ config }) => (
         {Object.entries(config.supplier).map(([key, val]) => (
           <div key={key}>
             <label className="block text-xs text-slate-500 uppercase tracking-widest mb-1">{key}</label>
-            <input type="text" defaultValue={val} className="input-field" />
+            <input 
+              type="text" 
+              value={val}
+              onChange={(e) => {
+                const newSupplier = { ...config.supplier, [key]: e.target.value };
+                setConfig({ ...config, supplier: newSupplier });
+              }}
+              className="input-field" 
+            />
           </div>
         ))}
       </div>
     </div>
+    
     <div className="glass glass-card">
+      <h4 className="text-lg font-bold mb-6 flex items-center gap-2"><Settings size={20} className="text-emerald-400" />Client Details</h4>
+      <div className="space-y-4">
+        {Object.entries(config.client).map(([key, val]) => (
+          <div key={key}>
+            <label className="block text-xs text-slate-500 uppercase tracking-widest mb-1">{key}</label>
+            <input 
+              type="text" 
+              value={val}
+              onChange={(e) => {
+                const newClient = { ...config.client, [key]: e.target.value };
+                setConfig({ ...config, client: newClient });
+              }}
+              className="input-field" 
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+
+    <div className="glass glass-card lg:col-span-2">
       <h4 className="text-lg font-bold mb-6 flex items-center gap-2"><Wallet size={20} className="text-emerald-400" />Active Bank Accounts</h4>
       <div className="space-y-3">
         {config.banks.map(bank => (
